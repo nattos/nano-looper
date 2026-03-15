@@ -38,11 +38,27 @@ LooperPlugin::LooperPlugin()
   SetParamInfo(PID_UNDO,      "Undo",      FF_TYPE_BOOLEAN, 0.0f);
   SetParamInfo(PID_REDO,      "Redo",      FF_TYPE_BOOLEAN, 0.0f);
   SetParamInfo(PID_RECORD,    "Record",    FF_TYPE_BOOLEAN, 0.0f);
+  SetParamInfo(PID_SHOW_OVERLAY, "Show Overlay", FF_TYPE_BOOLEAN, 1.0f);
 
   looper_.set_quantize(1.0);
+  param_values_[PID_SHOW_OVERLAY] = 1.0f;
 }
 
-LooperPlugin::~LooperPlugin() = default;
+LooperPlugin::~LooperPlugin() {
+  // Belt-and-suspenders: release any open gates before WS client destructor
+  // disconnects. DeInitGL should have done this already, but be safe.
+  for (int ch = 0; ch < kNumChannels; ++ch) {
+    if (gate_down_[ch] && !channels_[ch].clips.empty()) {
+      for (const auto& cr : channels_[ch].clips)
+        ws_client_.trigger_clip_off(cr.clip_id);
+      gate_down_[ch] = false;
+    }
+  }
+  // ws_client_ destructor calls disconnect() → stops IXWebSocket thread
+  // TextRenderer destructor calls deinit() — GL calls may be no-ops without context,
+  // but the CTFont and atlas memory are freed.
+  // Channel thumbnail textures should have been freed in DeInitGL.
+}
 
 // --- GL lifecycle ---
 
@@ -55,43 +71,110 @@ FFResult LooperPlugin::InitGL(const FFGLViewportStruct* vp) {
 }
 
 FFResult LooperPlugin::DeInitGL() {
+  // Release any open gates before disconnecting
+  for (int ch = 0; ch < kNumChannels; ++ch)
+    gateOff(ch);
+
   ws_client_.disconnect();
+
+  // Free thumbnail textures (GL context is still current here)
+  for (int i = 0; i < kNumChannels; ++i)
+    channels_[i].clear();
+
   overlay_.deinit();
   return FF_SUCCESS;
 }
 
 // --- Resolume integration ---
 
-void LooperPlugin::setupFromState(const nlohmann::json& state) {
-  auto comp = resolume::parse_composition(state);
+// Check if a string matches any of our channel tag identifiers.
+static bool is_channel_tag_effect(const std::string& s) {
+  return s == kChannelTagFFGLCode ||
+         s == kChannelTagPluginName ||
+         // Resolume may store names with slight variations
+         s.find("NanoLooper") != std::string::npos ||
+         s.find("NLCH") != std::string::npos;
+}
 
-  // Free old thumbnails
-  for (int i = 0; i < kNumChannels; ++i) {
-    if (clips_[i].thumbnail_tex) {
-      glDeleteTextures(1, &clips_[i].thumbnail_tex);
+// Determine which channel (0-3) a clip is tagged with via NanoLooper Ch effect.
+// Returns -1 if no tag found or tag is "Off".
+static int channel_from_clip(const resolume::Clip& clip) {
+  for (const auto& eff : clip.effects) {
+    if (!is_channel_tag_effect(eff.name) &&
+        !is_channel_tag_effect(eff.display_name))
+      continue;
+
+    // Find the Channel param — try exact name, then any param that looks like an option
+    auto it = eff.params.find(kChannelParamName);
+    if (it == eff.params.end()) {
+      // Resolume may capitalize differently or use display name
+      for (auto candidate = eff.params.begin(); candidate != eff.params.end(); ++candidate) {
+        if (candidate->first.find("hannel") != std::string::npos ||
+            candidate->second.valuetype == "ParamChoice" ||
+            candidate->second.valuetype == "ParamOption") {
+          it = candidate;
+          break;
+        }
+      }
     }
-    clips_[i] = {};
+    if (it == eff.params.end()) continue;
+
+    // Resolume stores ParamChoice as string label ("Channel 1", "Off", etc.)
+    // or as float (0.0=Off, 0.2=Ch1, 0.4=Ch2, 0.6=Ch3, 0.8=Ch4)
+    if (it->second.value.is_string()) {
+      std::string val = it->second.value.get<std::string>();
+      if (val.find('1') != std::string::npos) return 0;
+      if (val.find('2') != std::string::npos) return 1;
+      if (val.find('3') != std::string::npos) return 2;
+      if (val.find('4') != std::string::npos) return 3;
+      return -1; // "Off" or unrecognized
+    }
+    if (it->second.value.is_number()) {
+      float v = it->second.value.get<float>();
+      if (v < 0.1f) return -1;
+      if (v < 0.3f) return 0;
+      if (v < 0.5f) return 1;
+      if (v < 0.7f) return 2;
+      return 3;
+    }
+    return -1;
   }
+  return -1;
+}
 
-  if (static_cast<int>(comp.layers.size()) > kTargetLayer) {
-    auto& layer = comp.layers[kTargetLayer];
-    for (int i = 0; i < kNumChannels && i < static_cast<int>(layer.clips.size()); ++i) {
-      clips_[i].clip_id = layer.clips[i].id;
-      clips_[i].connected_id = layer.clips[i].connected_id;
-      clips_[i].name = layer.clips[i].name;
-      clips_[i].connected_state = layer.clips[i].connected_state;
-      clips_[i].thumbnail_path = layer.clips[i].thumbnail_path;
-      clips_[i].thumbnail_is_default = layer.clips[i].thumbnail_is_default;
+void LooperPlugin::assignChannelsFromComposition(const resolume::Composition& comp) {
+  for (int i = 0; i < kNumChannels; ++i)
+    channels_[i].clear();
 
-      // Fetch thumbnail for clips with content, using clip ID
-      if (clips_[i].connected_state != "Empty" && clips_[i].clip_id != 0) {
-        std::string url = "http://127.0.0.1:8080/api/v1/composition/clips/by-id/"
-                        + std::to_string(clips_[i].clip_id) + "/thumbnail";
-        clips_[i].thumbnail_tex = load_texture_from_url(
-            url.c_str(), &clips_[i].thumb_w, &clips_[i].thumb_h);
+  // Scan ALL layers and clips for channel tag effects
+  for (const auto& layer : comp.layers) {
+    for (const auto& clip : layer.clips) {
+      int ch = channel_from_clip(clip);
+      if (ch < 0 || ch >= kNumChannels) continue;
+      auto& chan = channels_[ch];
+      chan.clips.push_back({clip.id, clip.connected_id});
+
+      // First clip sets the display info
+      if (chan.clips.size() == 1) {
+        chan.name = clip.name;
+        chan.connected_state = clip.connected_state;
+        // Fetch thumbnail
+        if (clip.connected_state != "Empty" && clip.id != 0) {
+          std::string url = "http://127.0.0.1:8080/api/v1/composition/clips/by-id/"
+                          + std::to_string(clip.id) + "/thumbnail";
+          chan.thumbnail_tex = load_texture_from_url(
+              url.c_str(), &chan.thumb_w, &chan.thumb_h);
+        }
       }
     }
   }
+
+}
+
+void LooperPlugin::setupFromState(const nlohmann::json& state) {
+  auto comp = resolume::parse_composition(state);
+  assignChannelsFromComposition(comp);
+
   if (state.contains("tempocontroller") &&
       state["tempocontroller"].contains("tempo")) {
     auto& tempo = state["tempocontroller"]["tempo"];
@@ -102,8 +185,10 @@ void LooperPlugin::setupFromState(const nlohmann::json& state) {
 
 void LooperPlugin::subscribeParams() {
   for (int i = 0; i < kNumChannels; ++i) {
-    if (clips_[i].connected_id != 0)
-      ws_client_.subscribe_by_id(clips_[i].connected_id);
+    for (const auto& cr : channels_[i].clips) {
+      if (cr.connected_id != 0)
+        ws_client_.subscribe_by_id(cr.connected_id);
+    }
   }
   if (tempo_id_ != 0)
     ws_client_.subscribe_by_id(tempo_id_);
@@ -117,9 +202,12 @@ void LooperPlugin::processMessages() {
     } else if (auto* pu = std::get_if<resolume::ParameterUpdate>(&msg)) {
       if (pu->id == tempo_id_ && pu->value.is_number())
         bpm_ = pu->value.get<double>();
+      // Update connected state for any matching clip
       for (int i = 0; i < kNumChannels; ++i) {
-        if (pu->id == clips_[i].connected_id && pu->value.is_string())
-          clips_[i].connected_state = pu->value.get<std::string>();
+        for (const auto& cr : channels_[i].clips) {
+          if (pu->id == cr.connected_id && pu->value.is_string())
+            channels_[i].connected_state = pu->value.get<std::string>();
+        }
       }
     }
   }
@@ -128,11 +216,13 @@ void LooperPlugin::processMessages() {
 // --- Gate helpers ---
 
 void LooperPlugin::gateOn(int ch, int step) {
-  if (clips_[ch].clip_id == 0) return;
+  if (channels_[ch].clips.empty()) return;
   if (gate_down_[ch]) {
-    ws_client_.trigger_clip_off(clips_[ch].clip_id);
+    for (const auto& cr : channels_[ch].clips)
+      ws_client_.trigger_clip_off(cr.clip_id);
   }
-  ws_client_.trigger_clip_on(clips_[ch].clip_id);
+  for (const auto& cr : channels_[ch].clips)
+    ws_client_.trigger_clip_on(cr.clip_id);
   gate_down_[ch] = true;
   gate_step_[ch] = step;
   gate_timer_[ch] = (float)(60.0 / bpm_ / 4.0);
@@ -140,8 +230,8 @@ void LooperPlugin::gateOn(int ch, int step) {
 
 void LooperPlugin::gateOff(int ch) {
   if (!gate_down_[ch]) return;
-  if (clips_[ch].clip_id != 0)
-    ws_client_.trigger_clip_off(clips_[ch].clip_id);
+  for (const auto& cr : channels_[ch].clips)
+    ws_client_.trigger_clip_off(cr.clip_id);
   gate_down_[ch] = false;
   gate_step_[ch] = -1;
   gate_timer_[ch] = 0;
@@ -250,10 +340,18 @@ FFResult LooperPlugin::ProcessOpenGL(ProcessOpenGLStruct* pGL) {
 
   processMessages();
 
-  // Advance looper
+  // Advance looper phase.
+  // Prefer host-provided barPhase (from SetBeatInfo) when available —
+  // it's perfectly synced to Resolume's transport. Fall back to internal
+  // clock for the test harness which doesn't call SetBeatInfo.
   double prev = phase_;
-  double sixteenths_per_sec = (bpm_ / 60.0) * 4.0;
-  phase_ = std::fmod(phase_ + sixteenths_per_sec * dt, static_cast<double>(kNumSteps));
+  if (bpm > 0 && barPhase >= 0) {
+    // barPhase is 0..1 over one bar (4 beats = 16 sixteenth notes)
+    phase_ = static_cast<double>(barPhase) * kNumSteps;
+  } else {
+    double sixteenths_per_sec = (bpm_ / 60.0) * 4.0;
+    phase_ = std::fmod(phase_ + sixteenths_per_sec * dt, static_cast<double>(kNumSteps));
+  }
 
   // Record: clear steps at playhead as it advances
   if (record_held_) {
@@ -323,6 +421,10 @@ FFResult LooperPlugin::ProcessOpenGL(ProcessOpenGLStruct* pGL) {
     flash_[i] = std::max(0.0f, flash_[i] - dt);
 
   // --- Render ---
+  // If overlay is hidden, skip all rendering (return FF_FAIL = bypass)
+  if (param_values_[PID_SHOW_OVERLAY] < 0.5f)
+    return FF_FAIL;
+
   FFGLTextureStruct* tex = pGL->inputTextures[0];
   overlay_.drawPassthrough(tex, currentViewport);
 
@@ -330,6 +432,8 @@ FFResult LooperPlugin::ProcessOpenGL(ProcessOpenGLStruct* pGL) {
   state.viewport_w = currentViewport.width;
   state.viewport_h = currentViewport.height;
   state.phase = static_cast<float>(phase_);
+  // Use host BPM if available, otherwise WS-fetched BPM
+  if (bpm > 0) bpm_ = bpm;
   state.bpm = static_cast<float>(bpm_);
   state.recording = record_held_;
   state.delete_held = delete_held_;
@@ -342,12 +446,12 @@ FFResult LooperPlugin::ProcessOpenGL(ProcessOpenGLStruct* pGL) {
   state.time_since_start = time_since_start_;
 
   for (int ch = 0; ch < kNumChannels; ++ch) {
-    state.clip_names[ch] = clips_[ch].name;
-    state.clip_connected[ch] = (clips_[ch].connected_state == "Connected");
-    state.clip_has_content[ch] = (clips_[ch].connected_state != "Empty");
-    state.clip_thumbnail[ch] = clips_[ch].thumbnail_tex;
-    state.clip_thumb_w[ch] = clips_[ch].thumb_w;
-    state.clip_thumb_h[ch] = clips_[ch].thumb_h;
+    state.clip_names[ch] = channels_[ch].name;
+    state.clip_connected[ch] = (channels_[ch].connected_state == "Connected");
+    state.clip_has_content[ch] = !channels_[ch].clips.empty();
+    state.clip_thumbnail[ch] = channels_[ch].thumbnail_tex;
+    state.clip_thumb_w[ch] = channels_[ch].thumb_w;
+    state.clip_thumb_h[ch] = channels_[ch].thumb_h;
     // Mute display: momentary, both keys held
     state.muted[ch] = mute_held_ && trigger_held_[ch];
     state.flash[ch] = flash_[ch];

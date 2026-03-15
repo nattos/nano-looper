@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -18,6 +19,13 @@ struct Parameter {
   std::vector<std::string> options; // For ParamChoice
 };
 
+struct Effect {
+  int64_t id = 0;
+  std::string name;         // internal FFGL name/code
+  std::string display_name;
+  std::map<std::string, Parameter> params;
+};
+
 struct Clip {
   int64_t id = 0;
   std::string name;
@@ -26,6 +34,7 @@ struct Clip {
   Parameter video_opacity;
   std::string thumbnail_path;
   bool thumbnail_is_default = true;
+  std::vector<Effect> effects; // effects on this clip's video chain
 };
 
 struct Layer {

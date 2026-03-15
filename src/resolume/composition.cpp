@@ -18,6 +18,20 @@ Parameter parse_parameter(const nlohmann::json& j) {
   return p;
 }
 
+static Effect parse_effect(const nlohmann::json& j) {
+  Effect eff;
+  if (j.contains("id")) eff.id = j["id"].get<int64_t>();
+  if (j.contains("name")) eff.name = j["name"].get<std::string>();
+  if (j.contains("display_name")) eff.display_name = j["display_name"].get<std::string>();
+  if (j.contains("params") && j["params"].is_object()) {
+    for (auto& [key, val] : j["params"].items()) {
+      if (val.is_object() && val.contains("id") && val.contains("valuetype"))
+        eff.params[key] = parse_parameter(val);
+    }
+  }
+  return eff;
+}
+
 static Clip parse_clip(const nlohmann::json& j) {
   Clip clip;
   if (j.contains("id")) clip.id = j["id"].get<int64_t>();
@@ -30,12 +44,21 @@ static Clip parse_clip(const nlohmann::json& j) {
     if (conn.contains("value")) clip.connected_state = conn["value"].get<std::string>();
     if (conn.contains("id")) clip.connected_id = conn["id"].get<int64_t>();
   }
+  // Effects can be in video.effects or directly in clip.effects (depends on Resolume version)
+  auto parse_effects_from = [&](const nlohmann::json& container) {
+    if (container.contains("effects") && container["effects"].is_array()) {
+      for (const auto& eff_json : container["effects"])
+        clip.effects.push_back(parse_effect(eff_json));
+    }
+  };
   if (j.contains("video") && j["video"].is_object()) {
     auto& video = j["video"];
-    if (video.contains("opacity")) {
+    if (video.contains("opacity"))
       clip.video_opacity = parse_parameter(video["opacity"]);
-    }
+    parse_effects_from(video);
   }
+  // Also check for effects directly on the clip (some Resolume versions)
+  parse_effects_from(j);
   if (j.contains("thumbnail") && j["thumbnail"].is_object()) {
     auto& th = j["thumbnail"];
     if (th.contains("path")) clip.thumbnail_path = th["path"].get<std::string>();

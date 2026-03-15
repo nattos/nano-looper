@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <ffgl/FFGLPluginSDK.h>
 
@@ -22,22 +23,42 @@ enum ParamID : FFUInt32 {
   PID_UNDO,
   PID_REDO,
   PID_RECORD,
+  PID_SHOW_OVERLAY,
   PID_COUNT,
 };
 
 static constexpr int kNumChannels = 4;
 static constexpr int kNumSteps = 16;
-static constexpr int kTargetLayer = 1;
 
-struct PluginClipInfo {
+// The FFGL plugin identifiers used to find channel tag effects in the composition.
+// Resolume may store the 4-char code, the plugin name, or an internal name.
+static constexpr const char* kChannelTagFFGLCode = "NLCH";
+static constexpr const char* kChannelTagPluginName = "NanoLooper Ch";
+// The parameter name in the channel tag effect
+static constexpr const char* kChannelParamName = "Channel";
+
+struct PluginClipRef {
   int64_t clip_id = 0;
   int64_t connected_id = 0;
+};
+
+struct PluginChannelInfo {
+  // First clip's display info (for UI)
   std::string name;
   std::string connected_state = "Empty";
-  std::string thumbnail_path;
-  bool thumbnail_is_default = true;
   GLuint thumbnail_tex = 0;
   int thumb_w = 0, thumb_h = 0;
+
+  // All clips assigned to this channel
+  std::vector<PluginClipRef> clips;
+
+  void clear() {
+    name.clear();
+    connected_state = "Empty";
+    if (thumbnail_tex) { glDeleteTextures(1, &thumbnail_tex); thumbnail_tex = 0; }
+    thumb_w = thumb_h = 0;
+    clips.clear();
+  }
 };
 
 class LooperPlugin : public CFFGLPlugin {
@@ -56,12 +77,16 @@ private:
   void setupFromState(const nlohmann::json& state);
   void subscribeParams();
 
+  // Scan all clips in the composition for NanoLooper Ch effects.
+  // Falls back to layer 2 first 4 clips if no tags found.
+  void assignChannelsFromComposition(const resolume::Composition& comp);
+
   // Core logic
   looper::LooperCore looper_;
   resolume::ResolumeWsClient ws_client_;
 
-  // Resolume state
-  PluginClipInfo clips_[kNumChannels];
+  // Channel state
+  PluginChannelInfo channels_[kNumChannels];
   double bpm_ = 120.0;
   int64_t tempo_id_ = 0;
   double phase_ = 0.0;
@@ -69,24 +94,22 @@ private:
   // Channel trigger held state (piano-key)
   bool trigger_held_[kNumChannels] = {};
 
-  // Mute: momentary. Muted while BOTH mute + channel key are held.
+  // Mute: momentary
   bool mute_held_ = false;
 
-  // Delete: momentary. Hold delete, press 1-4 to clear channel.
-  // Release without pressing 1-4 → clear all.
+  // Delete: momentary
   bool delete_held_ = false;
   bool delete_acted_ = false;
 
-  // Record: momentary. Held = recording. Clears steps at playhead.
+  // Record: momentary
   bool record_held_ = false;
-  int record_last_step_ = -1; // last step cleared by record head
-  // Protect steps that were just user-added from being cleared
+  int record_last_step_ = -1;
   bool step_protected_[kNumChannels][kNumSteps] = {};
 
-  // Clip gate: keep clip "connected" for one 16th note
+  // Clip gate
   bool gate_down_[kNumChannels] = {};
   float gate_timer_[kNumChannels] = {};
-  int gate_step_[kNumChannels] = {}; // which step opened this gate (-1 = none)
+  int gate_step_[kNumChannels] = {};
 
   void gateOn(int ch, int step = -1);
   void gateOff(int ch);
@@ -94,7 +117,7 @@ private:
   // Visual
   float flash_[kNumChannels] = {};
 
-  // Parameter values (for GetFloatParameter)
+  // Parameter values
   float param_values_[PID_COUNT] = {};
 
   // Connection status

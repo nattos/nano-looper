@@ -85,11 +85,15 @@ struct TextRenderer::Impl {
   void createFont(float size) {
     font_size = size;
 
-    // Primary: Menlo. Fallback: system monospace.
-    font = CTFontCreateWithName(CFSTR("Menlo"), size, nullptr);
-    if (!font) {
-      // macOS 10.15+
-      font = CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, size, nullptr);
+    // Use runtime-created CFString (not CFSTR compile-time constant)
+    // to avoid issues in dynamically loaded bundles.
+    @autoreleasepool {
+      CFStringRef name = CFStringCreateWithCString(
+          kCFAllocatorDefault, "Menlo", kCFStringEncodingUTF8);
+      font = CTFontCreateWithName(name, size, nullptr);
+      CFRelease(name);
+      if (!font)
+        font = CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, size, nullptr);
     }
 
     // Get monospace advance width from space character

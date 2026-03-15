@@ -98,6 +98,13 @@ target_link_libraries(looper_cli PRIVATE looper_core resolume_client)
 set(FFGL_BUILD_EXAMPLE_PLUGINS OFF CACHE BOOL "" FORCE)
 add_subdirectory(tmp/native/modules/ffgl)
 
+# --- Channel Tag Plugin (auxiliary, lightweight) ---
+add_library(channel_tag_plugin STATIC
+  src/plugin/channel_tag_plugin.cpp
+)
+target_include_directories(channel_tag_plugin PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(channel_tag_plugin PUBLIC ffgl::sdk)
+
 # --- Looper Plugin (static library) ---
 add_library(looper_plugin STATIC
   src/plugin/looper_plugin.cpp
@@ -117,6 +124,50 @@ if(APPLE)
     "-framework CoreText"
     "-framework CoreGraphics"
     "-framework Foundation"
+  )
+endif()
+
+# --- FFGL Bundles (macOS .bundle for Resolume) ---
+if(APPLE)
+  # Common FFGL bundle linker flags
+  set(FFGL_BUNDLE_LINK_FLAGS "-undefined dynamic_lookup")
+
+  # NanoLooper main plugin bundle
+  add_library(NanoLooper MODULE
+    src/plugin/looper_plugin.cpp
+    src/plugin/overlay_renderer.cpp
+    src/plugin/text_renderer.mm
+    src/plugin/image_loader.mm
+  )
+  target_include_directories(NanoLooper PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(NanoLooper PRIVATE
+    ffgl::sdk looper_core resolume_client
+    "-framework OpenGL"
+    "-framework CoreText"
+    "-framework CoreGraphics"
+    "-framework Foundation"
+  )
+  set_target_properties(NanoLooper PROPERTIES
+    BUNDLE TRUE
+    BUNDLE_EXTENSION "bundle"
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/plugin/Info.plist.in"
+    LINK_FLAGS "${FFGL_BUNDLE_LINK_FLAGS}"
+  )
+
+  # NanoLooper Channel tag plugin bundle
+  add_library(NanoLooperCh MODULE
+    src/plugin/channel_tag_plugin.cpp
+  )
+  target_include_directories(NanoLooperCh PRIVATE ${CMAKE_SOURCE_DIR}/src)
+  target_link_libraries(NanoLooperCh PRIVATE
+    ffgl::sdk
+    "-framework OpenGL"
+  )
+  set_target_properties(NanoLooperCh PROPERTIES
+    BUNDLE TRUE
+    BUNDLE_EXTENSION "bundle"
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/src/plugin/Info.plist.in"
+    LINK_FLAGS "${FFGL_BUNDLE_LINK_FLAGS}"
   )
 endif()
 

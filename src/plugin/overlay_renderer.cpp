@@ -203,14 +203,14 @@ void OverlayRenderer::drawImage(GLuint tex, float x, float y, float w, float h,
                                  int vp_w, int vp_h) {
   if (!tex) return;
   float x1 = x + w, y1 = y + h;
-  // CG bitmaps are top-down, so flip V: 0,0 at top-left → UV (0,1) to (1,0)
+  // Standard UV: top-left = (0,0), bottom-right = (1,1)
   float verts[] = {
-    x,  y,  0, 1,
-    x1, y,  1, 1,
-    x,  y1, 0, 0,
-    x1, y,  1, 1,
-    x1, y1, 1, 0,
-    x,  y1, 0, 0,
+    x,  y,  0, 0,
+    x1, y,  1, 0,
+    x,  y1, 0, 1,
+    x1, y,  1, 0,
+    x1, y1, 1, 1,
+    x,  y1, 0, 1,
   };
   glUseProgram(img_program_);
   glUniform2f(glGetUniformLocation(img_program_, "uViewport"), (float)vp_w, (float)vp_h);
@@ -250,16 +250,13 @@ void OverlayRenderer::drawOverlay(const OverlayState& state) {
 
   // Layout top-down from top-left
   float y = margin;
+  float content_w = 0; // track widest element for panel sizing
 
   // --- Title + connection status ---
   text_.push_text(margin, y, "Looper", 0.9f, 0.9f, 0.9f, 0.9f);
 
   if (state.recording)
     text_.push_text(margin + gw * 8, y, "* REC", 1, 0.2f, 0.2f, 1);
-
-  char bpm_buf[32];
-  snprintf(bpm_buf, sizeof(bpm_buf), "%.0f BPM", state.bpm);
-  text_.push_text(margin + gw * 15, y, bpm_buf, 0.5f, 0.5f, 0.5f, 0.7f);
 
   y += lh + row_gap;
 
@@ -372,12 +369,16 @@ void OverlayRenderer::drawOverlay(const OverlayState& state) {
       }
     }
 
+    float cards_total_w = kOverlayChannels * card_w + (kOverlayChannels - 1) * card_gap;
+    if (cards_total_w > content_w) content_w = cards_total_w;
     y += card_h + row_gap * 2;
   }
 
   // --- Beat markers ---
   float cells_x = margin + gw * 2;
   float cell = lh + 4;
+  float grid_total_w = cells_x - margin + kOverlaySteps * cell + gw;
+  if (grid_total_w > content_w) content_w = grid_total_w;
 
   int current_step = (int)std::floor(state.phase);
   if (current_step >= kOverlaySteps) current_step = 0;
@@ -443,17 +444,13 @@ void OverlayRenderer::drawOverlay(const OverlayState& state) {
   text_.push_text(mod_x + gw * 2, y, "M", 1, 1, 0.2f, state.mute_held ? 1.0f : 0.25f);
   y += lh + row_gap;
 
-  // --- Help row ---
-  text_.push_text(margin, y, "q=quit z=undo x=redo r=rec", 0.4f, 0.4f, 0.4f, 0.5f);
-  y += lh + row_gap;
-
   // Background panel — draw FIRST so it's behind everything
-  float panel_w = cells_x + kOverlaySteps * cell + gw;
+  float panel_w = content_w;
   // Insert at the beginning: flush any pending quads, draw panel, then re-flush content
   // We need to separate the panel from content. Flush content quads first.
   std::vector<ColorVertex> content_quads = std::move(quad_batch_);
   quad_batch_.clear();
-  pushQuad(margin - 8, margin - 8, panel_w + 8, y - margin + 8, 0, 0, 0, 0.55f);
+  pushQuad(margin - 8, margin - 8, panel_w + 16, y - margin + 8, 0, 0, 0, 0.55f);
   flushQuads(vw, vh); // draw panel
 
   // Now draw content quads on top
