@@ -288,16 +288,19 @@ TEST_CASE("can_undo and can_redo report correctly", "[looper][undo]") {
 
 // --- Destructive record ---
 
-TEST_CASE("Destructive record clears events and records new ones", "[looper][destructive]") {
+TEST_CASE("Destructive record keeps existing events until cleared", "[looper][destructive]") {
   LooperCore lp(16.0, 4);
   lp.trigger(0, 1.0);
   lp.trigger(1, 2.0);
   REQUIRE(lp.events().size() == 2);
 
   lp.begin_destructive_record();
-  REQUIRE(lp.events().empty());
+  REQUIRE(lp.events().size() == 2); // not cleared upfront
   REQUIRE(lp.is_destructive_recording());
 
+  // Progressive clear + add new events
+  lp.clear_at(0, 1);
+  lp.clear_at(1, 2);
   lp.trigger(2, 0.5);
   lp.trigger(3, 1.5);
   REQUIRE(lp.events().size() == 2);
@@ -314,6 +317,9 @@ TEST_CASE("Undo destructive record restores pre-record state", "[looper][destruc
   lp.trigger(1, 2.0);
 
   lp.begin_destructive_record();
+  // Simulate progressive clearing + new events
+  lp.clear_at(0, 1);
+  lp.clear_at(1, 2);
   lp.trigger(2, 0.5);
   lp.trigger(3, 1.5);
   lp.end_destructive_record();
@@ -329,6 +335,7 @@ TEST_CASE("Redo after undo destructive record restores recorded events", "[loope
   lp.trigger(0, 1.0);
 
   lp.begin_destructive_record();
+  lp.clear_at(0, 1); // clear original
   lp.trigger(2, 0.5);
   lp.end_destructive_record();
 
@@ -346,6 +353,7 @@ TEST_CASE("Triggers during destructive record do not push individual undo steps"
   lp.trigger(0, 1.0);
 
   lp.begin_destructive_record();
+  lp.clear_at(0, 1); // clear original
   lp.trigger(2, 0.5);
   lp.trigger(3, 1.0);
   lp.trigger(3, 2.0);
@@ -368,7 +376,7 @@ TEST_CASE("Destructive record with no prior events", "[looper][destructive]") {
 
   REQUIRE(lp.events().size() == 1);
 
-  lp.undo();
+  lp.undo(); // pre-record state was empty
   REQUIRE(lp.events().empty());
 }
 
@@ -397,4 +405,72 @@ TEST_CASE("Empty looper operations are safe", "[looper]") {
   lp.undo();
   lp.redo();
   REQUIRE(lp.events().empty());
+}
+
+// --- clear_at ---
+
+TEST_CASE("clear_at removes event at specific step/channel", "[looper]") {
+  LooperCore lp(16.0, 4);
+  lp.set_quantize(1.0);
+  lp.trigger(0, 3.0); // step 3, ch 0
+  lp.trigger(1, 3.0); // step 3, ch 1
+  lp.trigger(0, 5.0); // step 5, ch 0
+  REQUIRE(lp.events().size() == 3);
+
+  lp.clear_at(0, 3); // remove ch 0 at step 3
+  REQUIRE(lp.events().size() == 2);
+  // ch 1 at step 3 still there, ch 0 at step 5 still there
+  REQUIRE(lp.events_for_channel(0).size() == 1);
+  REQUIRE(lp.events_for_channel(1).size() == 1);
+}
+
+TEST_CASE("clear_at is undoable outside destructive record", "[looper]") {
+  LooperCore lp(16.0, 4);
+  lp.trigger(0, 3.0);
+  lp.clear_at(0, 3);
+  REQUIRE(lp.events().empty());
+
+  lp.undo();
+  REQUIRE(lp.events().size() == 1);
+}
+
+TEST_CASE("clear_at does not push undo during destructive record", "[looper]") {
+  LooperCore lp(16.0, 4);
+  lp.trigger(0, 1.0);
+  lp.trigger(0, 3.0);
+  lp.trigger(0, 5.0);
+
+  lp.begin_destructive_record();
+  // Simulate playhead clearing steps 1 and 3
+  lp.clear_at(0, 1);
+  lp.clear_at(0, 3);
+  // Add new event at step 5 (already exists, no-op)
+  // Add new event at step 7
+  lp.trigger(0, 7.0);
+  lp.end_destructive_record();
+
+  // Should have events at step 5 (original) and 7 (new)
+  REQUIRE(lp.events().size() == 2);
+
+  // One undo restores pre-record state (3 events at 1, 3, 5)
+  lp.undo();
+  REQUIRE(lp.events().size() == 3);
+}
+
+TEST_CASE("Destructive record does not clear events upfront", "[looper][destructive]") {
+  LooperCore lp(16.0, 4);
+  lp.trigger(0, 1.0);
+  lp.trigger(1, 2.0);
+
+  lp.begin_destructive_record();
+  // Events should still be present (progressive clearing happens externally)
+  REQUIRE(lp.events().size() == 2);
+  lp.end_destructive_record();
+}
+
+TEST_CASE("clear_at on nonexistent step is safe", "[looper]") {
+  LooperCore lp(16.0, 4);
+  lp.trigger(0, 3.0);
+  lp.clear_at(0, 7); // no event at step 7
+  REQUIRE(lp.events().size() == 1);
 }

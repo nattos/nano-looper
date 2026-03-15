@@ -37,11 +37,16 @@ public:
   void clear_channel(int channel);
   void clear_all();
 
+  // --- Editing (step-level) ---
+  // Remove the event for a specific channel at a specific step.
+  // During destructive recording, does not push undo.
+  void clear_at(int channel, int step);
+
   // --- Destructive record ---
-  // Saves current state, clears all events, enters record mode.
-  // Individual trigger() calls during this mode do NOT push undo steps.
-  // When end_destructive_record() is called, the pre-record state becomes
-  // one undo step (so undo restores everything before the destructive record).
+  // Saves current state and enters record mode.
+  // Individual trigger() and clear_at() calls during this mode do NOT
+  // push undo steps. When end_destructive_record() is called, the
+  // pre-record state becomes one undo step.
   void begin_destructive_record();
   void end_destructive_record();
   bool is_destructive_recording() const { return destructive_recording_; }

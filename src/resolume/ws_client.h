@@ -35,6 +35,10 @@ public:
   // Sends the true/false pulse that Resolume requires.
   void trigger_clip(int64_t clip_id);
 
+  // Separate on/off for gate-style triggering.
+  void trigger_clip_on(int64_t clip_id);
+  void trigger_clip_off(int64_t clip_id);
+
   // Poll for received messages (call from main thread).
   // Drains the internal queue and returns all pending messages.
   std::vector<IncomingMessage> poll();

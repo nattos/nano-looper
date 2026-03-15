@@ -24,6 +24,8 @@ struct Clip {
   std::string connected_state; // "Empty", "Disconnected", "Connected", etc.
   int64_t connected_id = 0;   // ID of the connected ParamState
   Parameter video_opacity;
+  std::string thumbnail_path;
+  bool thumbnail_is_default = true;
 };
 
 struct Layer {

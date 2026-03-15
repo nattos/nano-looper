@@ -1,8 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
-project(resolume-client LANGUAGES CXX)
+project(resolume-client LANGUAGES CXX OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_OBJCXX_STANDARD 17)
+
+# Silence macOS OpenGL deprecation warnings
+add_compile_definitions(GL_SILENCE_DEPRECATION)
 
 # --- Dependencies via FetchContent ---
 include(FetchContent)
@@ -78,9 +82,53 @@ add_executable(test_looper_core tests/test_looper_core.cpp)
 target_link_libraries(test_looper_core PRIVATE looper_core Catch2::Catch2WithMain)
 catch_discover_tests(test_looper_core)
 
+add_executable(test_utf8 tests/test_utf8.cpp)
+target_include_directories(test_utf8 PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_utf8 PRIVATE Catch2::Catch2WithMain)
+catch_discover_tests(test_utf8)
+
 # --- Tools ---
 add_executable(testme tools/testme.cpp)
 target_link_libraries(testme PRIVATE resolume_client)
 
 add_executable(looper_cli tools/looper_cli.cpp)
 target_link_libraries(looper_cli PRIVATE looper_core resolume_client)
+
+# --- FFGL SDK ---
+set(FFGL_BUILD_EXAMPLE_PLUGINS OFF CACHE BOOL "" FORCE)
+add_subdirectory(tmp/native/modules/ffgl)
+
+# --- Looper Plugin (static library) ---
+add_library(looper_plugin STATIC
+  src/plugin/looper_plugin.cpp
+  src/plugin/overlay_renderer.cpp
+  src/plugin/text_renderer.mm
+  src/plugin/image_loader.mm
+)
+target_include_directories(looper_plugin PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(looper_plugin PUBLIC
+  ffgl::sdk
+  looper_core
+  resolume_client
+)
+if(APPLE)
+  target_link_libraries(looper_plugin PUBLIC
+    "-framework OpenGL"
+    "-framework CoreText"
+    "-framework CoreGraphics"
+    "-framework Foundation"
+  )
+endif()
+
+# --- Test Harness (macOS only) ---
+if(APPLE)
+  add_executable(looper_harness tools/harness/main.mm)
+  target_link_libraries(looper_harness PRIVATE
+    looper_plugin
+    "-framework Cocoa"
+    "-framework OpenGL"
+  )
+  set_target_properties(looper_harness PROPERTIES
+    MACOSX_BUNDLE FALSE
+  )
+endif()

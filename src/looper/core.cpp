@@ -84,9 +84,20 @@ void LooperCore::clear_all() {
   events_.clear();
 }
 
+void LooperCore::clear_at(int channel, int step) {
+  if (!destructive_recording_)
+    push_undo();
+  events_.erase(
+      std::remove_if(events_.begin(), events_.end(),
+                     [channel, step, this](const Event& e) {
+                       return e.channel == channel &&
+                              static_cast<int>(std::floor(e.time)) == step;
+                     }),
+      events_.end());
+}
+
 void LooperCore::begin_destructive_record() {
   pre_record_snapshot_ = events_;
-  events_.clear();
   destructive_recording_ = true;
 }
 

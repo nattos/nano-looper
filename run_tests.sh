@@ -41,6 +41,7 @@ echo "=== C++ unit tests ==="
 build/test_protocol --reporter compact
 build/test_composition --reporter compact
 build/test_looper_core --reporter compact
+build/test_utf8 --reporter compact
 echo "=== C++ unit tests: PASSED ==="
 
 # 4. Start mock server for integration tests

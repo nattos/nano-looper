@@ -36,6 +36,11 @@ static Clip parse_clip(const nlohmann::json& j) {
       clip.video_opacity = parse_parameter(video["opacity"]);
     }
   }
+  if (j.contains("thumbnail") && j["thumbnail"].is_object()) {
+    auto& th = j["thumbnail"];
+    if (th.contains("path")) clip.thumbnail_path = th["path"].get<std::string>();
+    if (th.contains("is_default")) clip.thumbnail_is_default = th["is_default"].get<bool>();
+  }
   return clip;
 }
 

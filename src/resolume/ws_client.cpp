@@ -64,6 +64,18 @@ void ResolumeWsClient::trigger_clip(int64_t clip_id) {
   trigger(path, false);
 }
 
+void ResolumeWsClient::trigger_clip_on(int64_t clip_id) {
+  std::string path =
+      "/composition/clips/by-id/" + std::to_string(clip_id) + "/connect";
+  trigger(path, true);
+}
+
+void ResolumeWsClient::trigger_clip_off(int64_t clip_id) {
+  std::string path =
+      "/composition/clips/by-id/" + std::to_string(clip_id) + "/connect";
+  trigger(path, false);
+}
+
 std::vector<IncomingMessage> ResolumeWsClient::poll() {
   std::lock_guard<std::mutex> lock(inbox_mutex_);
   std::vector<IncomingMessage> result(

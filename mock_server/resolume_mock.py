@@ -292,6 +292,32 @@ class ResolumeServer:
                 except ConnectionResetError:
                     pass
 
+    async def handle_thumbnail(self, request: web.Request) -> web.Response:
+        """Serve a simple generated thumbnail PNG."""
+        import struct, zlib, hashlib
+        # Generate a small 64x48 colored PNG based on the URL path
+        w, h = 64, 48
+        seed = hashlib.md5(request.path.encode()).digest()
+        r0, g0, b0 = seed[0], seed[1], seed[2]
+        raw = b''
+        for y in range(h):
+            raw += b'\x00'  # PNG filter: None
+            for x in range(w):
+                t = y / h
+                r = int(r0 * (1 - t * 0.5))
+                g = int(g0 * (1 - t * 0.3))
+                b = int(b0 * (1 - t * 0.7))
+                raw += struct.pack('BBBB', r & 0xFF, g & 0xFF, b & 0xFF, 255)
+        def png_chunk(ctype, data):
+            c = ctype + data
+            return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c) & 0xFFFFFFFF)
+        ihdr = struct.pack('>IIBBBBB', w, h, 8, 6, 0, 0, 0)
+        png = b'\x89PNG\r\n\x1a\n'
+        png += png_chunk(b'IHDR', ihdr)
+        png += png_chunk(b'IDAT', zlib.compress(raw))
+        png += png_chunk(b'IEND', b'')
+        return web.Response(body=png, content_type='image/png')
+
     async def handle_product(self, request: web.Request) -> web.Response:
         return web.json_response({
             "name": "Mock Arena",
@@ -314,6 +340,8 @@ def create_app(state: ResolumeState | None = None) -> web.Application:
     app.router.add_get("/api/v1", server.handle_ws)
     app.router.add_get("/api/v1/product", server.handle_product)
     app.router.add_get("/api/product", server.handle_product)
+    app.router.add_get("/api/v1/composition/clips/{tail:.*}", server.handle_thumbnail)
+    app.router.add_get("/api/v1/composition/thumbnail/{tail:.*}", server.handle_thumbnail)
     return app
 
 
