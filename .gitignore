@@ -20,3 +20,8 @@ dist
 
 /modules/
 generated/
+
+/tmp/
+/build/
+__pycache__/
+.pytest_cache/
