@@ -96,7 +96,7 @@ target_link_libraries(looper_cli PRIVATE looper_core resolume_client)
 
 # --- FFGL SDK ---
 set(FFGL_BUILD_EXAMPLE_PLUGINS OFF CACHE BOOL "" FORCE)
-add_subdirectory(tmp/native/modules/ffgl)
+add_subdirectory(modules/ffgl)
 
 # --- Channel Tag Plugin (auxiliary, lightweight) ---
 add_library(channel_tag_plugin STATIC

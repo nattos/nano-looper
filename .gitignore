@@ -18,7 +18,7 @@ Build/Windows/x64/Release/
 node_modules/
 dist
 
-/modules/
+!/modules/ffgl
 generated/
 
 /tmp/
