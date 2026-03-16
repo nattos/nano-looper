@@ -287,6 +287,7 @@ void OverlayRenderer::drawOverlay(const OverlayState& state) {
       pushQuad(dot_x, dot_y, dot_size, dot_size, 0.3f, 0.5f, 1.0f, pulse);
       text_.push_text(text_x, y, "Connecting...", 0.4f, 0.6f, 1.0f, 0.6f);
     }
+
   }
 
   y += lh + row_gap;
@@ -305,7 +306,7 @@ void OverlayRenderer::drawOverlay(const OverlayState& state) {
     for (int i = 0; i < kOverlayChannels; ++i) {
       float cx = margin + i * (card_w + card_gap);
 
-      // Border color: channel color if actively playing (gate open), dim otherwise
+      // Border color: use internal gate state (instant, no WS delay)
       bool ch_active = (state.active_step[i] >= 0);
       float br, bg, bb, ba;
       if (ch_active) {
@@ -414,14 +415,18 @@ void OverlayRenderer::drawOverlay(const OverlayState& state) {
         pushQuad(cx - 1, y - 1, cell, cell, 0.5f, 0.5f, 0.5f, 0.25f);
 
       if (has_event) {
+        float bar_w = 3.0f; // left edge bar width
         if (is_muted) {
-          pushQuad(cx, y, cell - 2, lh, cr, cg, cb, 0.25f);
+          pushQuad(cx, y, bar_w, lh, cr, cg, cb, 0.4f);
+          pushQuad(cx + bar_w, y, cell - 2 - bar_w, lh, cr, cg, cb, 0.25f);
         } else if (playing) {
           // This step is actively playing — full vibrant color
-          pushQuad(cx, y, cell - 2, lh, cr, cg, cb, 1.0f);
+          pushQuad(cx, y, bar_w, lh, cr, cg, cb, 1.0f);
+          pushQuad(cx + bar_w, y, cell - 2 - bar_w, lh, cr, cg, cb, 1.0f);
         } else {
-          // Has event but not currently playing — faded
-          pushQuad(cx, y, cell - 2, lh, cr * 0.5f, cg * 0.5f, cb * 0.5f, 0.7f);
+          // Has event but not currently playing — bright bar, faded fill
+          pushQuad(cx, y, bar_w, lh, cr, cg, cb, 1.0f);
+          pushQuad(cx + bar_w, y, cell - 2 - bar_w, lh, cr * 0.5f, cg * 0.5f, cb * 0.5f, 0.7f);
         }
       } else {
         pushQuad(cx, y, cell - 2, lh, 0.5f, 0.5f, 0.5f, cur ? 0.15f : 0.06f);

@@ -26,6 +26,7 @@ struct OverlayState {
   bool connected = false;
   bool ever_connected = false;
   float time_since_start = 0.0f;
+  std::string status_extra; // additional status text (e.g. watchdog info)
 
   std::string clip_names[kOverlayChannels];
   bool clip_connected[kOverlayChannels] = {};

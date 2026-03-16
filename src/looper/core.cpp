@@ -72,6 +72,9 @@ std::vector<int> LooperCore::advance(double prev_time, double new_time) const {
 }
 
 void LooperCore::clear_channel(int channel) {
+  bool has_any = std::any_of(events_.begin(), events_.end(),
+      [channel](const Event& e) { return e.channel == channel; });
+  if (!has_any) return;
   push_undo();
   events_.erase(
       std::remove_if(events_.begin(), events_.end(),
@@ -80,16 +83,23 @@ void LooperCore::clear_channel(int channel) {
 }
 
 void LooperCore::clear_all() {
+  if (events_.empty()) return;
   push_undo();
   events_.clear();
 }
 
 void LooperCore::clear_at(int channel, int step) {
+  bool has_any = std::any_of(events_.begin(), events_.end(),
+      [channel, step](const Event& e) {
+        return e.channel == channel &&
+               static_cast<int>(std::floor(e.time)) == step;
+      });
+  if (!has_any) return;
   if (!destructive_recording_)
     push_undo();
   events_.erase(
       std::remove_if(events_.begin(), events_.end(),
-                     [channel, step, this](const Event& e) {
+                     [channel, step](const Event& e) {
                        return e.channel == channel &&
                               static_cast<int>(std::floor(e.time)) == step;
                      }),

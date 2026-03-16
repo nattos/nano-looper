@@ -197,6 +197,9 @@ void LooperPlugin::subscribeParams() {
 void LooperPlugin::processMessages() {
   for (auto& msg : ws_client_.poll()) {
     if (auto* cs = std::get_if<resolume::CompositionState>(&msg)) {
+      // New composition state (reconnect or clip change) — release all gates
+      // since clip IDs may have changed
+      for (int c = 0; c < kNumChannels; ++c) gateOff(c);
       setupFromState(cs->data);
       subscribeParams();
     } else if (auto* pu = std::get_if<resolume::ParameterUpdate>(&msg)) {
@@ -217,9 +220,15 @@ void LooperPlugin::processMessages() {
 
 void LooperPlugin::gateOn(int ch, int step) {
   if (channels_[ch].clips.empty()) return;
+  // Cancel watchdog — we're opening the gate intentionally
+  watchdog_active_[ch] = false;
   if (gate_down_[ch]) {
-    for (const auto& cr : channels_[ch].clips)
-      ws_client_.trigger_clip_off(cr.clip_id);
+    // Already connected — just extend the gate. Don't send false+true,
+    // which causes Resolume race conditions (especially at bar boundaries
+    // where step 15→0 fires back-to-back).
+    gate_step_[ch] = step;
+    gate_timer_[ch] = (float)(60.0 / bpm_ / 4.0);
+    return;
   }
   for (const auto& cr : channels_[ch].clips)
     ws_client_.trigger_clip_on(cr.clip_id);
@@ -235,6 +244,10 @@ void LooperPlugin::gateOff(int ch) {
   gate_down_[ch] = false;
   gate_step_[ch] = -1;
   gate_timer_[ch] = 0;
+  // Start watchdog: keep checking if Resolume actually disconnected.
+  // If it still reports "Connected" after 100ms, send another false.
+  watchdog_active_[ch] = true;
+  watchdog_timer_[ch] = kWatchdogInterval;
 }
 
 // --- Parameter handling ---
@@ -259,10 +272,12 @@ FFResult LooperPlugin::SetFloatParameter(unsigned int index, float value) {
         if (delete_held_) {
           looper_.clear_channel(ch);
           delete_acted_ = true;
+          last_action_was_clear_all_ = false;
           // Release gate if channel was playing
           gateOff(ch);
         } else if (!mute_held_) {
           // Normal trigger: record + gate on
+          last_action_was_clear_all_ = false;
           looper_.trigger(ch, phase_);
           int step = static_cast<int>(std::floor(phase_)) % kNumSteps;
           gateOn(ch, step);
@@ -280,8 +295,14 @@ FFResult LooperPlugin::SetFloatParameter(unsigned int index, float value) {
         delete_acted_ = false;
       } else if (falling && delete_held_) {
         if (!delete_acted_) {
-          looper_.clear_all();
-          // Release all gates
+          if (last_action_was_clear_all_ && looper_.can_undo()) {
+            // Double-tap delete-all = undo
+            looper_.undo();
+            last_action_was_clear_all_ = false;
+          } else {
+            looper_.clear_all();
+            last_action_was_clear_all_ = true;
+          }
           for (int c = 0; c < kNumChannels; ++c) gateOff(c);
         }
         delete_held_ = false;
@@ -295,15 +316,21 @@ FFResult LooperPlugin::SetFloatParameter(unsigned int index, float value) {
     case PID_UNDO:
       if (rising) {
         looper_.undo();
+        last_action_was_clear_all_ = false;
         for (int c = 0; c < kNumChannels; ++c) gateOff(c);
       }
       break;
     case PID_REDO:
-      if (rising) looper_.redo();
+      if (rising) {
+        looper_.redo();
+        last_action_was_clear_all_ = false;
+        for (int c = 0; c < kNumChannels; ++c) gateOff(c);
+      }
       break;
 
     case PID_RECORD:
       if (rising) {
+        last_action_was_clear_all_ = false;
         looper_.begin_destructive_record();
         record_held_ = true;
         record_last_step_ = -1;
@@ -359,8 +386,12 @@ FFResult LooperPlugin::ProcessOpenGL(ProcessOpenGLStruct* pGL) {
     if (cur_step != record_last_step_) {
       // Entered a new step — clear unprotected events here
       for (int ch = 0; ch < kNumChannels; ++ch) {
-        if (!step_protected_[ch][cur_step])
+        if (!step_protected_[ch][cur_step]) {
           looper_.clear_at(ch, cur_step);
+          // If we just erased the step that was holding a gate open, release it
+          if (gate_down_[ch] && gate_step_[ch] == cur_step)
+            gateOff(ch);
+        }
       }
       // Previous step is no longer protected (playhead has passed it)
       if (record_last_step_ >= 0) {
@@ -407,6 +438,24 @@ FFResult LooperPlugin::ProcessOpenGL(ProcessOpenGLStruct* pGL) {
       if (gate_timer_[ch] <= 0)
         gateOff(ch);
     }
+    // Watchdog: after gate closed, keep checking Resolume's reported state.
+    // If it still says "Connected", send another false every 100ms.
+    if (watchdog_active_[ch]) {
+      watchdog_timer_[ch] -= dt;
+      if (watchdog_timer_[ch] <= 0) {
+        if (channels_[ch].connected_state == "Connected") {
+          // Resolume is stuck — send true+false to unstick
+          for (const auto& cr : channels_[ch].clips) {
+            ws_client_.trigger_clip_on(cr.clip_id);
+            ws_client_.trigger_clip_off(cr.clip_id);
+          }
+          watchdog_timer_[ch] = kWatchdogInterval; // check again in 100ms
+        } else {
+          // Resolume confirms disconnected — stop watching
+          watchdog_active_[ch] = false;
+        }
+      }
+    }
   }
 
   // Check mute: if a channel just became muted while gate is open, release
@@ -444,6 +493,19 @@ FFResult LooperPlugin::ProcessOpenGL(ProcessOpenGLStruct* pGL) {
   state.connected = is_connected;
   state.ever_connected = ever_connected_;
   state.time_since_start = time_since_start_;
+
+  // Build watchdog status string
+  {
+    std::string wd;
+    for (int ch = 0; ch < kNumChannels; ++ch) {
+      if (watchdog_active_[ch]) {
+        if (!wd.empty()) wd += " ";
+        wd += "WD" + std::to_string(ch + 1);
+        wd += (channels_[ch].connected_state == "Connected") ? ":stuck" : ":ok";
+      }
+    }
+    state.status_extra = std::move(wd);
+  }
 
   for (int ch = 0; ch < kNumChannels; ++ch) {
     state.clip_names[ch] = channels_[ch].name;

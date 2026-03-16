@@ -97,9 +97,10 @@ private:
   // Mute: momentary
   bool mute_held_ = false;
 
-  // Delete: momentary
+  // Delete: momentary. Double-tap delete-all = undo.
   bool delete_held_ = false;
   bool delete_acted_ = false;
+  bool last_action_was_clear_all_ = false;
 
   // Record: momentary
   bool record_held_ = false;
@@ -110,6 +111,13 @@ private:
   bool gate_down_[kNumChannels] = {};
   float gate_timer_[kNumChannels] = {};
   int gate_step_[kNumChannels] = {};
+
+  // Watchdog: after gate closes, keep monitoring Resolume's reported
+  // connected state. If it still says "Connected" after 100ms, send
+  // another false. Repeat every 100ms until it clears or a new gate opens.
+  bool watchdog_active_[kNumChannels] = {};
+  float watchdog_timer_[kNumChannels] = {};
+  static constexpr float kWatchdogInterval = 0.1f; // 100ms
 
   void gateOn(int ch, int step = -1);
   void gateOff(int ch);
