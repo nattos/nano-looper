@@ -9,6 +9,7 @@
 
 #include "image_loader.h"
 #include "looper/core.h"
+#include "synth.h"
 #include "overlay_renderer.h"
 #include "resolume/composition.h"
 #include "resolume/ws_client.h"
@@ -24,6 +25,8 @@ enum ParamID : FFUInt32 {
   PID_REDO,
   PID_RECORD,
   PID_SHOW_OVERLAY,
+  PID_SYNTH,
+  PID_SYNTH_GAIN,
   PID_COUNT,
 };
 
@@ -135,6 +138,9 @@ private:
   // Timing
   std::chrono::steady_clock::time_point last_tick_;
   bool first_frame_ = true;
+
+  // Audio
+  Synth synth_;
 
   // Rendering
   OverlayRenderer overlay_;

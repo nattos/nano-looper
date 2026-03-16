@@ -9,6 +9,7 @@
   LooperPlugin* _plugin;
   GLuint _inputTex;
   BOOL _glReady;
+  BOOL _synthEnabled;
 }
 @end
 
@@ -136,6 +137,13 @@ static int paramForChar(unichar c) {
 
   if (c == 'q' || c == 27) {
     [[NSApplication sharedApplication] terminate:nil];
+    return;
+  }
+
+  // Synth toggle
+  if (c == 's') {
+    _synthEnabled = !_synthEnabled;
+    _plugin->SetFloatParameter(PID_SYNTH, _synthEnabled ? 1.0f : 0.0f);
     return;
   }
 

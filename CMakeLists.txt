@@ -111,6 +111,7 @@ add_library(looper_plugin STATIC
   src/plugin/overlay_renderer.cpp
   src/plugin/text_renderer.mm
   src/plugin/image_loader.mm
+  src/plugin/synth.mm
 )
 target_include_directories(looper_plugin PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(looper_plugin PUBLIC
@@ -124,6 +125,8 @@ if(APPLE)
     "-framework CoreText"
     "-framework CoreGraphics"
     "-framework Foundation"
+    "-framework AVFoundation"
+    "-framework AudioToolbox"
   )
 endif()
 
@@ -138,6 +141,7 @@ if(APPLE)
     src/plugin/overlay_renderer.cpp
     src/plugin/text_renderer.mm
     src/plugin/image_loader.mm
+    src/plugin/synth.mm
   )
   target_include_directories(NanoLooper PRIVATE ${CMAKE_SOURCE_DIR}/src)
   target_link_libraries(NanoLooper PRIVATE
@@ -146,6 +150,8 @@ if(APPLE)
     "-framework CoreText"
     "-framework CoreGraphics"
     "-framework Foundation"
+    "-framework AVFoundation"
+    "-framework AudioToolbox"
   )
   set_target_properties(NanoLooper PROPERTIES
     BUNDLE TRUE
@@ -178,6 +184,8 @@ if(APPLE)
     looper_plugin
     "-framework Cocoa"
     "-framework OpenGL"
+    "-framework AVFoundation"
+    "-framework AudioToolbox"
   )
   set_target_properties(looper_harness PROPERTIES
     MACOSX_BUNDLE FALSE

@@ -54,6 +54,8 @@ In Resolume, map the looper's parameters to your MIDI controller, keyboard, or O
 | Undo / Redo | Boolean | Step backward/forward through edit history |
 | Record | Boolean | Hold to destructive-record (erases steps as playhead passes) |
 | Show Overlay | Boolean | Toggle the visual overlay on/off |
+| Synth | Boolean | Toggle built-in practice synth (plays tones when steps fire) |
+| Synth Gain | Slider | Volume for the practice synth (0.0–1.0) |
 
 All trigger parameters are **piano-key style**: press = true, release = false.
 
@@ -65,6 +67,7 @@ All trigger parameters are **piano-key style**: press = true, release = false.
 2. The looper records each press into the grid, quantized to the nearest 16th note
 3. After one bar (16 steps), the pattern loops and triggers your clips automatically
 4. Press **Delete** (tap and release) to clear everything and start over
+5. Accidentally cleared? Tap **Delete** again immediately to undo — the double-tap restores your pattern
 
 ### Building up: layered recording
 
@@ -91,6 +94,12 @@ All trigger parameters are **piano-key style**: press = true, release = false.
 4. While holding Record, press **2** to lay down new steps in real time
 5. Release **Record** to stop erasing
 6. If you don't like it, **Undo** restores everything from before you started recording
+
+### Tips
+
+- **Double-tap Delete** to undo a clear-all — tap Delete to clear, then tap again to bring it all back. Any other action in between resets this.
+- **Enable the Synth** for practice without Resolume audio — hear your patterns as a major chord (C5, E5, G5, C6). Turn it off for performance.
+- **Steps stay connected for one 16th note** — this supports Resolume's Piano trigger style. Consecutive steps extend the connection seamlessly.
 
 ## Architecture
 
@@ -121,9 +130,9 @@ All trigger parameters are **piano-key style**: press = true, release = false.
   │ (events, undo,      (subscribe, trigger, ───────────┘│
   │  quantize)           gate on/off)                    │
   │                                                      │
-  │ OverlayRenderer     TextRenderer                     │
-  │ (grid, cards,        (Core Text,                     │
-  │  status)              glyph atlas)                   │
+  │ OverlayRenderer     TextRenderer     Synth           │
+  │ (grid, cards,        (Core Text,      (AVAudioEngine,│
+  │  status)              glyph atlas)     sine plucks)  │
   └──────────────────────────────────────────────────────┘
 ```
 
@@ -133,9 +142,11 @@ All trigger parameters are **piano-key style**: press = true, release = false.
 
 **Channel Tag Plugin** — Lightweight FFGL effect (always bypasses rendering). Exposes a Channel dropdown. The main plugin scans the composition JSON for these effects to discover which clips belong to which channels.
 
-**OverlayRenderer** — GL 3.2 Core Profile. Colored quad batching + Core Text font rendering with automatic Unicode fallback. Draws clip cards, step grid, beat markers, and status indicators.
+**OverlayRenderer** — GL 3.2 Core Profile. Colored quad batching + Core Text font rendering with automatic Unicode fallback. Draws clip cards with thumbnails, step grid with beat markers, and status indicators.
 
-**Gate model** — Clips are held "connected" for the duration of one 16th note, supporting Resolume's Piano trigger style. Consecutive steps retrigger (off-on). Muting or deleting while a gate is open sends an immediate off.
+**Gate model** — Clips are held "connected" for the duration of one 16th note, supporting Resolume's Piano trigger style. Consecutive steps extend the gate seamlessly without disconnect/reconnect. A watchdog monitors Resolume's reported state and retries disconnection if needed.
+
+**Synth** — Optional practice synth using AVAudioEngine. Four sine oscillators tuned to a C major chord (C5–C6) with exponential decay envelopes. Fires on every step trigger for audible feedback without Resolume audio.
 
 ## Build from source
 
@@ -163,7 +174,7 @@ Dependencies are fetched automatically via CMake FetchContent:
 | IXWebSocket | WebSocket client |
 | nlohmann/json | JSON parsing |
 | Catch2 | C++ test framework |
-| FFGL SDK | FreeFrame GL plugin API (included in `tmp/native/modules/ffgl/`) |
+| FFGL SDK | FreeFrame GL plugin API (git submodule at `modules/ffgl/`) |
 
 ### Development with the test harness
 
@@ -176,6 +187,7 @@ The test harness hosts the FFGL plugin directly in a native macOS window, mappin
 | m | Mute (hold) |
 | z / x | Undo / Redo |
 | r | Record (hold) |
+| s | Toggle synth |
 | q | Quit |
 
 Connect to the mock server (`python mock_server/resolume_mock.py`) or real Resolume running on localhost.

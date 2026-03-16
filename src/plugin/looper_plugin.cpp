@@ -39,6 +39,9 @@ LooperPlugin::LooperPlugin()
   SetParamInfo(PID_REDO,      "Redo",      FF_TYPE_BOOLEAN, 0.0f);
   SetParamInfo(PID_RECORD,    "Record",    FF_TYPE_BOOLEAN, 0.0f);
   SetParamInfo(PID_SHOW_OVERLAY, "Show Overlay", FF_TYPE_BOOLEAN, 1.0f);
+  SetParamInfo(PID_SYNTH,        "Synth",        FF_TYPE_BOOLEAN, 0.0f);
+  SetParamInfo(PID_SYNTH_GAIN,   "Synth Gain",   FF_TYPE_STANDARD, 0.5f);
+  param_values_[PID_SYNTH_GAIN] = 0.5f;
 
   looper_.set_quantize(1.0);
   param_values_[PID_SHOW_OVERLAY] = 1.0f;
@@ -64,6 +67,7 @@ LooperPlugin::~LooperPlugin() {
 
 FFResult LooperPlugin::InitGL(const FFGLViewportStruct* vp) {
   overlay_.init();
+  synth_.init();
   ws_client_.connect("ws://127.0.0.1:8080/api/v1");
   last_tick_ = std::chrono::steady_clock::now();
   first_frame_ = true;
@@ -75,6 +79,7 @@ FFResult LooperPlugin::DeInitGL() {
   for (int ch = 0; ch < kNumChannels; ++ch)
     gateOff(ch);
 
+  synth_.deinit();
   ws_client_.disconnect();
 
   // Free thumbnail textures (GL context is still current here)
@@ -222,6 +227,8 @@ void LooperPlugin::gateOn(int ch, int step) {
   if (channels_[ch].clips.empty()) return;
   // Cancel watchdog — we're opening the gate intentionally
   watchdog_active_[ch] = false;
+  // Synth fires on every step (even when extending the gate)
+  synth_.trigger(ch);
   if (gate_down_[ch]) {
     // Already connected — just extend the gate. Don't send false+true,
     // which causes Resolume race conditions (especially at bar boundaries
@@ -276,7 +283,7 @@ FFResult LooperPlugin::SetFloatParameter(unsigned int index, float value) {
           // Release gate if channel was playing
           gateOff(ch);
         } else if (!mute_held_) {
-          // Normal trigger: record + gate on
+          // Normal trigger: record + gate on (gateOn handles synth)
           last_action_was_clear_all_ = false;
           looper_.trigger(ch, phase_);
           int step = static_cast<int>(std::floor(phase_)) % kNumSteps;
@@ -341,6 +348,13 @@ FFResult LooperPlugin::SetFloatParameter(unsigned int index, float value) {
         looper_.end_destructive_record();
         record_held_ = false;
       }
+      break;
+
+    case PID_SYNTH:
+      synth_.set_enabled(value >= 0.5f);
+      break;
+    case PID_SYNTH_GAIN:
+      synth_.set_gain(value);
       break;
   }
 
